@@ -19,6 +19,7 @@ class RepresentationType(Enum):
     VOXEL = auto()
     STEPAN = auto()
 
+
 def set_seed(seed):
     random.seed(seed)
     torch.manual_seed(seed)
@@ -27,28 +28,33 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
     np.random.seed(seed)
 
+
 def compute_epe_error(pred_flow: torch.Tensor, gt_flow: torch.Tensor):
-    '''
+    """
     end-point-error (ground truthと予測値の二乗誤差)を計算
     pred_flow: torch.Tensor, Shape: torch.Size([B, 2, 480, 640]) => 予測したオプティカルフローデータ
     gt_flow: torch.Tensor, Shape: torch.Size([B, 2, 480, 640]) => 正解のオプティカルフローデータ
-    '''
-    epe = torch.mean(torch.mean(torch.norm(pred_flow - gt_flow, p=2, dim=1), dim=(1, 2)), dim=0)
+    """
+    epe = torch.mean(
+        torch.mean(torch.norm(pred_flow - gt_flow, p=2, dim=1), dim=(1, 2)), dim=0
+    )
     return epe
 
+
 def save_optical_flow_to_npy(flow: torch.Tensor, file_name: str):
-    '''
+    """
     optical flowをnpyファイルに保存
     flow: torch.Tensor, Shape: torch.Size([2, 480, 640]) => オプティカルフローデータ
     file_name: str => ファイル名
-    '''
+    """
     np.save(f"{file_name}.npy", flow.cpu().numpy())
+
 
 @hydra.main(version_base=None, config_path="configs", config_name="base")
 def main(args: DictConfig):
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    '''
+    """
         ディレクトリ構造:
 
         data
@@ -69,8 +75,8 @@ def main(args: DictConfig):
             |    └─ forward_timestamps.txt
             ├─zurich_city_11_b
             └─zurich_city_11_c
-        '''
-    
+        """
+
     # ------------------
     #    Dataloader
     # ------------------
@@ -78,23 +84,27 @@ def main(args: DictConfig):
         dataset_path=Path(args.dataset_path),
         representation_type=RepresentationType.VOXEL,
         delta_t_ms=100,
-        num_bins=4
+        num_bins=4,
     )
     train_set = loader.get_train_dataset()
     test_set = loader.get_test_dataset()
     collate_fn = train_collate
-    train_data = DataLoader(train_set,
-                                 batch_size=args.data_loader.train.batch_size,
-                                 shuffle=args.data_loader.train.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
-    test_data = DataLoader(test_set,
-                                 batch_size=args.data_loader.test.batch_size,
-                                 shuffle=args.data_loader.test.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
+    train_data = DataLoader(
+        train_set,
+        batch_size=args.data_loader.train.batch_size,
+        shuffle=args.data_loader.train.shuffle,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
+    test_data = DataLoader(
+        test_set,
+        batch_size=args.data_loader.test.batch_size,
+        shuffle=args.data_loader.test.shuffle,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
 
-    '''
+    """
     train data:
         Type of batch: Dict
         Key: seq_name, Type: list
@@ -106,7 +116,7 @@ def main(args: DictConfig):
         Type of batch: Dict
         Key: seq_name, Type: list
         Key: event_volume, Type: torch.Tensor, Shape: torch.Size([Batch, 4, 480, 640]) => イベントデータのバッチ
-    '''
+    """
     # ------------------
     #       Model
     # ------------------
@@ -115,32 +125,52 @@ def main(args: DictConfig):
     # ------------------
     #   optimizer
     # ------------------
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.train.initial_learning_rate, weight_decay=args.train.weight_decay)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=args.train.initial_learning_rate,
+        weight_decay=args.train.weight_decay,
+    )
+    # ------------------
+    # Learning Rate Scheduler
+    # ------------------
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=args.train.scheduler.step_size,
+        gamma=args.train.scheduler.gamma,
+    )
     # ------------------
     #   Start training
     # ------------------
     model.train()
     for epoch in range(args.train.epochs):
         total_loss = 0
-        print("on epoch: {}".format(epoch+1))
+        print("on epoch: {}".format(epoch + 1))
         for i, batch in enumerate(tqdm(train_data)):
             batch: Dict[str, Any]
-            event_image = batch["event_volume"].to(device) # [B, 4, 480, 640]
-            ground_truth_flow = batch["flow_gt"].to(device) # [B, 2, 480, 640]
-            flow = model(event_image) # [B, 2, 480, 640]
-            loss: torch.Tensor = compute_epe_error(flow, ground_truth_flow)
-            print(f"batch {i} loss: {loss.item()}")
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            inputs = {
+                "event_volume_1": batch["event_volume_1"].to(device),
+                "event_volume_2": batch["event_volume_2"].to(device),
+            }
+            ground_truth_flow = batch["flow_gt"].to(device)  # [B, 2, 480, 640]
+            try:
+                flow = model(inputs)  # [B, 2, 480, 640]
+                loss: torch.Tensor = compute_epe_error(flow, ground_truth_flow)
+                #             print(f"batch {i} loss: {loss.item()}")
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            except Exception as e:
+                print(f"Error in training loop at batch {i}: {e}")
 
-            total_loss += loss.item()
-        print(f'Epoch {epoch+1}, Loss: {total_loss / len(train_data)}')
+        # 学習率スケジューラを更新
+        scheduler.step()
+    print(f"Epoch {epoch + 1}, Loss: {total_loss / len(train_data)}")
 
     # Create the directory if it doesn't exist
-    if not os.path.exists('checkpoints'):
-        os.makedirs('checkpoints')
-    
+    if not os.path.exists("checkpoints"):
+        os.makedirs("checkpoints")
+
     current_time = time.strftime("%Y%m%d%H%M%S")
     model_path = f"checkpoints/model_{current_time}.pth"
     torch.save(model.state_dict(), model_path)
@@ -155,9 +185,13 @@ def main(args: DictConfig):
     with torch.no_grad():
         print("start test")
         for batch in tqdm(test_data):
-            batch: Dict[str, Any]
-            event_image = batch["event_volume"].to(device)
-            batch_flow = model(event_image) # [1, 2, 480, 640]
+            event_volume_1 = batch["event_volume_1"].to(device)
+            event_volume_2 = batch["event_volume_2"].to(device)
+            inputs = {
+                "event_volume_1": event_volume_1,
+                "event_volume_2": event_volume_2,
+            }
+            batch_flow = model(inputs)
             flow = torch.cat((flow, batch_flow), dim=0)  # [N, 2, 480, 640]
         print("test done")
     # ------------------
@@ -165,6 +199,7 @@ def main(args: DictConfig):
     # ------------------
     file_name = "submission"
     save_optical_flow_to_npy(flow, file_name)
+
 
 if __name__ == "__main__":
     main()

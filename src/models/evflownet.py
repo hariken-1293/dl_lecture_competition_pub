@@ -29,40 +29,60 @@ class EVFlowNet(nn.Module):
         self.decoder4 = upsample_conv2d_and_predict_flow(in_channels=2*_BASE_CHANNELS+2,
                         out_channels=int(_BASE_CHANNELS/2), do_batch_norm=not self._args.no_batch_norm)
 
-    def forward(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        # encoder
-        skip_connections = {}
-        inputs = self.encoder1(inputs)
-        skip_connections['skip0'] = inputs.clone()
-        inputs = self.encoder2(inputs)
-        skip_connections['skip1'] = inputs.clone()
-        inputs = self.encoder3(inputs)
-        skip_connections['skip2'] = inputs.clone()
-        inputs = self.encoder4(inputs)
-        skip_connections['skip3'] = inputs.clone()
+    def forward(self, inputs: Dict[str, Any]) -> torch.Tensor:
+#         print(f"Inside forward: {inputs.keys()}")  # Debugging line
+        event_volume_1 = inputs['event_volume_1']
+        event_volume_2 = inputs['event_volume_2']
+        combined_input = torch.cat([event_volume_1, event_volume_2], dim=1)
+#         print(f"Combined input shape: {combined_input.shape}")  # Debugging line
 
-        # transition
-        inputs = self.resnet_block(inputs)
+        try:
+            # encoder
+            skip_connections = {}
+            inputs = self.encoder1(combined_input)  # 修正: combined_inputを渡す
+            skip_connections['skip0'] = inputs.clone()
+#             print("Passed encoder1")  # Debugging line
+            inputs = self.encoder2(inputs)
+            skip_connections['skip1'] = inputs.clone()
+#             print("Passed encoder2")  # Debugging line
+            inputs = self.encoder3(inputs)
+            skip_connections['skip2'] = inputs.clone()
+#             print("Passed encoder3")  # Debugging line
+            inputs = self.encoder4(inputs)
+            skip_connections['skip3'] = inputs.clone()
+#             print("Passed encoder4")  # Debugging line
 
-        # decoder
-        flow_dict = {}
-        inputs = torch.cat([inputs, skip_connections['skip3']], dim=1)
-        inputs, flow = self.decoder1(inputs)
-        flow_dict['flow0'] = flow.clone()
+            # transition
+            inputs = self.resnet_block(inputs)
+#             print("Passed resnet_block")  # Debugging line
 
-        inputs = torch.cat([inputs, skip_connections['skip2']], dim=1)
-        inputs, flow = self.decoder2(inputs)
-        flow_dict['flow1'] = flow.clone()
+            # decoder
+            flow_dict = {}
+            inputs = torch.cat([inputs, skip_connections['skip3']], dim=1)
+            inputs, flow = self.decoder1(inputs)
+            flow_dict['flow0'] = flow.clone()
+#             print("Passed decoder1")  # Debugging line
 
-        inputs = torch.cat([inputs, skip_connections['skip1']], dim=1)
-        inputs, flow = self.decoder3(inputs)
-        flow_dict['flow2'] = flow.clone()
+            inputs = torch.cat([inputs, skip_connections['skip2']], dim=1)
+            inputs, flow = self.decoder2(inputs)
+            flow_dict['flow1'] = flow.clone()
+#             print("Passed decoder2")  # Debugging line
 
-        inputs = torch.cat([inputs, skip_connections['skip0']], dim=1)
-        inputs, flow = self.decoder4(inputs)
-        flow_dict['flow3'] = flow.clone()
+            inputs = torch.cat([inputs, skip_connections['skip1']], dim=1)
+            inputs, flow = self.decoder3(inputs)
+            flow_dict['flow2'] = flow.clone()
+#             print("Passed decoder3")  # Debugging line
+
+            inputs = torch.cat([inputs, skip_connections['skip0']], dim=1)
+            inputs, flow = self.decoder4(inputs)
+            flow_dict['flow3'] = flow.clone()
+#             print("Passed decoder4")  # Debugging line
+
+        except Exception as e:
+            print(f"Error in forward pass: {e}")
 
         return flow
+
         
 
 # if __name__ == "__main__":

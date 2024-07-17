@@ -252,6 +252,7 @@ class Sequence(Dataset):
         self.voxel_grid = VoxelGrid(
                 (self.num_bins, self.height, self.width), normalize=True)
         self.delta_t_us = delta_t_ms * 1000
+        self.delta_t_us_two_frames = delta_t_ms * 2000
 
         # Left events only
         ev_data_file = ev_dir_location / 'events.h5'
@@ -341,6 +342,14 @@ class Sequence(Dataset):
         x_rect = xy_rect[:, 0]
         y_rect = xy_rect[:, 1]
 
+        # 2フレーム分のイベントデータをvoxel gridに変換
+        event_representation = self.events_to_voxel_grid(p, t, x_rect, y_rect)
+
+        # 2フレーム分のイベントデータを分割
+        mid_point = event_representation.shape[0] // 2
+        output['event_volume_1'] = event_representation[:mid_point]
+        output['event_volume_2'] = event_representation[mid_point:]
+    
         if self.voxel_grid is None:
             raise NotImplementedError
         else:
@@ -525,7 +534,6 @@ class SequenceRecurrent(Sequence):
                                 v, i, j, h, w) for v in value]
         return sequence
 
-
 class DatasetProvider:
     def __init__(self, dataset_path: Path, representation_type: RepresentationType, delta_t_ms: int = 100, num_bins=4,
                 config=None, visualize=False):
@@ -610,3 +618,4 @@ def rec_train_collate(sample_list):
         seq_of_batch.append(train_collate(
             [sample[i] for sample in sample_list]))
     return seq_of_batch
+
