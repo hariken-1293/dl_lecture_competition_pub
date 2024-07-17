@@ -153,13 +153,15 @@ def main(args: DictConfig):
             }
             ground_truth_flow = batch["flow_gt"].to(device)  # [B, 2, 480, 640]
             try:
-                flow = model(inputs)  # [B, 2, 480, 640]
-                loss: torch.Tensor = compute_epe_error(flow, ground_truth_flow)
-                #             print(f"batch {i} loss: {loss.item()}")
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
+                predicted_flow = model(inputs)  # [B, 2, 480, 640]
+                if predicted_flow is not None:
+                    loss: torch.Tensor = model.compute_loss(predicted_flow, ground_truth_flow)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    total_loss += loss.item()
+                else:
+                    print(f"Skipping batch {i} due to None output from model")
             except Exception as e:
                 print(f"Error in training loop at batch {i}: {e}")
 
@@ -192,7 +194,10 @@ def main(args: DictConfig):
                 "event_volume_2": event_volume_2,
             }
             batch_flow = model(inputs)
-            flow = torch.cat((flow, batch_flow), dim=0)  # [N, 2, 480, 640]
+            if batch_flow is not None:
+                flow = torch.cat((flow, batch_flow), dim=0)  # [N, 2, 480, 640]
+            else:
+                print("Skipping batch due to None output from model")
         print("test done")
     # ------------------
     #  save submission
